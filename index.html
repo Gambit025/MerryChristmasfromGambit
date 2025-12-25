@@ -353,19 +353,59 @@
             const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
             const handLandmarker = await HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`, delegate: "GPU" }, runningMode: "VIDEO", numHands: 1 });
             const video = document.getElementById("input-video");
+            
+            // --- 核心修改：获取 Canvas 上下文用于绘图 ---
+            const canvasElement = document.getElementById("skeleton-canvas");
+            const canvasCtx = canvasElement.getContext("2d");
+            const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             video.srcObject = stream;
             video.addEventListener("loadeddata", () => {
+                // 设置画布尺寸
+                canvasElement.width = video.clientWidth;
+                canvasElement.height = video.clientHeight;
+
                 document.getElementById('loading').style.display = 'none';
                 updateStatus("准备就绪", "#0f0");
                 const predict = async () => {
                     const result = handLandmarker.detectForVideo(video, performance.now());
+                    
+                    // --- 核心修改：每一帧清除并重绘虚线 ---
+                    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
                     if (result.landmarks && result.landmarks.length > 0) {
                         isHandPresent = true;
-                        const l = result.landmarks[0];
-                        handPos = { x: 1 - (l[0].x + l[9].x)/2, y: (l[0].y + l[9].y)/2 };
-                        let folded = 0; [8,12,16,20].forEach(idx => { if(Math.sqrt((l[idx].x-l[0].x)**2 + (l[idx].y-l[0].y)**2) < 0.25) folded++; });
-                        const pinch = Math.sqrt((l[4].x-l[8].x)**2 + (l[4].y-l[8].y)**2) < 0.08;
+                        const landmarks = result.landmarks[0];
+
+                        // 绘制虚线骨架
+                        canvasCtx.save();
+                        canvasCtx.strokeStyle = "#00ff00"; 
+                        canvasCtx.lineWidth = 2;
+                        canvasCtx.setLineDash([3, 3]); // 设置虚线
+                        canvasCtx.shadowBlur = 5;
+                        canvasCtx.shadowColor = "#00ff00";
+
+                        CONNECTIONS.forEach(([s, e]) => {
+                            canvasCtx.beginPath();
+                            canvasCtx.moveTo(landmarks[s].x * canvasElement.width, landmarks[s].y * canvasElement.height);
+                            canvasCtx.lineTo(landmarks[e].x * canvasElement.width, landmarks[e].y * canvasElement.height);
+                            canvasCtx.stroke();
+                        });
+                        canvasCtx.restore();
+
+                        // 绘制关键点
+                        canvasCtx.fillStyle = "#ffffff";
+                        landmarks.forEach(p => {
+                            canvasCtx.beginPath();
+                            canvasCtx.arc(p.x * canvasElement.width, p.y * canvasElement.height, 2, 0, 2 * Math.PI);
+                            canvasCtx.fill();
+                        });
+
+                        // 原有逻辑保持不变
+                        handPos = { x: 1 - (landmarks[0].x + landmarks[9].x)/2, y: (landmarks[0].y + landmarks[9].y)/2 };
+                        let folded = 0; [8,12,16,20].forEach(idx => { if(Math.sqrt((landmarks[idx].x-landmarks[0].x)**2 + (landmarks[idx].y-landmarks[0].y)**2) < 0.25) folded++; });
+                        const pinch = Math.sqrt((landmarks[4].x-landmarks[8].x)**2 + (landmarks[4].y-landmarks[8].y)**2) < 0.08;
                         if (pinch && currentState === STATE.SCATTER) {
                             currentState = STATE.ZOOM;
                             if (zoomTargetIndex === -1) {
